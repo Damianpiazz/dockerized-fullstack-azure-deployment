@@ -1,0 +1,25 @@
+# dependencies
+node_modules
+
+# Prisma generated clients
+generated
+.prisma
+
+# builds
+dist
+build
+
+# logs
+npm-debug.log
+yarn-error.log
+
+# env
+.env
+
+# git
+.git
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db

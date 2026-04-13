@@ -1,0 +1,72 @@
+services:
+
+  app-postgres:
+    image: postgres:16
+    container_name: app-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: app_db
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d app_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  app-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: app-backend
+    restart: always
+    depends_on:
+      app-postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      NODE_ENV: development
+      DATABASE_URL: postgresql://app_user:app_pass@app-postgres:5432/app_db
+      CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - app-network
+
+  app-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: app-frontend
+    restart: always
+    depends_on:
+      app-backend:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080/api
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  app_postgres_data:
