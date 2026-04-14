@@ -1,17 +1,18 @@
-FROM node:20
+FROM node:20-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache openssl
+
 COPY package*.json ./
+COPY prisma ./prisma/
+
 RUN npm install
 
-COPY prisma ./prisma
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN npx prisma generate
 
 COPY . .
 
 EXPOSE 8080
 
-ENTRYPOINT ["/entrypoint.sh"]
+CMD ["sh", "-c", "sleep 5 && npx prisma db push && node src/server.js"]

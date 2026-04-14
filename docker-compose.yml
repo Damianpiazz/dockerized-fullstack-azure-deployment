@@ -37,9 +37,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./backend:/app
-      - /app/node_modules
-      - /app/generated
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
     networks:
       - app-network
 
@@ -58,9 +57,10 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    command: npm run dev
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/services:/app/services
+      - ./frontend/lib:/app/lib
     networks:
       - app-network
 

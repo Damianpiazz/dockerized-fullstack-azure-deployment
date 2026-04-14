@@ -1,18 +1,12 @@
-FROM node:20-bullseye
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copiar manifests primero para aprovechar cache
 COPY package*.json ./
+RUN npm install
 
-# Instalar dependencias
-RUN npm ci
-
-# Copiar el resto del código
 COPY . .
 
-# Puerto de Next.js
 EXPOSE 3000
 
-# Ejecutar modo desarrollo
 CMD ["npm", "run", "dev"]
