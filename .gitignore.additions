@@ -1,0 +1,18 @@
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/*.tfplan
+
+# Env files (nunca al repo)
+.env
+.env.local
+.env.production
+*.env
+
+# SSH keys
+*.pem
+id_rsa
+id_rsa.pub
