@@ -1,0 +1,20 @@
+# terraform.tfvars
+# Copiá este archivo y completá los valores reales
+# NUNCA subas este archivo al repositorio (ya está en .gitignore)
+
+prefix   = "app"
+location = "East US"
+vm_size  = "Standard_B2s"
+
+admin_username = "azureuser"
+
+# Tu clave SSH publica (contenido de ~/.ssh/id_rsa.pub o similar)
+ssh_public_key = "ssh-rsa AAAA... tu_clave_publica_aqui"
+
+# Tu IP publica para restringir SSH (recomendado)
+# Conseguila con: curl ifconfig.me
+ssh_source_ip = "190.210.x.x/32"
+
+# Dominio (opcional, dejar vacio si no tenes)
+domain_name = ""
+# domain_name = "miapp.com"
