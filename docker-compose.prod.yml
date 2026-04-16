@@ -1,0 +1,65 @@
+services:
+
+  app-postgres:
+    image: postgres:16
+    container_name: app-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-app_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido}
+    ports:
+      # Solo expone a localhost (Nginx hace el proxy externo)
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app_user} -d ${POSTGRES_DB:-app_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  app-backend:
+    image: ${DOCKER_REGISTRY}/app-backend:${IMAGE_TAG:-latest}
+    container_name: app-backend
+    restart: always
+    depends_on:
+      app-postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD}@app-postgres:5432/${POSTGRES_DB:-app_db}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+    ports:
+      # Solo expone a localhost (Nginx hace el proxy externo)
+      - "127.0.0.1:8080:8080"
+    networks:
+      - app-network
+
+  app-frontend:
+    image: ${DOCKER_REGISTRY}/app-frontend:${IMAGE_TAG:-latest}
+    container_name: app-frontend
+    restart: always
+    depends_on:
+      app-backend:
+        condition: service_started
+    environment:
+      # El frontend llama al backend DESDE EL NAVEGADOR del usuario
+      # Por eso usa la IP/dominio publico, no el nombre del container
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      NODE_ENV: production
+    ports:
+      # Solo expone a localhost (Nginx hace el proxy externo)
+      - "127.0.0.1:3000:3000"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  app_postgres_data:
