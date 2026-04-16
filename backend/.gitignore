@@ -79,3 +79,4 @@ docker-compose.local.yml
 .env.*
 !.env.example
 /generated/prisma
+backend_dump.txt
