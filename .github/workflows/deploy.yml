@@ -1,0 +1,152 @@
+name: CI/CD Deploy
+
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch:
+#     inputs:
+#       force_deploy:
+#         description: 'Forzar deploy aunque no haya cambios'
+#         required: false
+#         default: 'false'
+
+on: []  # ⛔ Workflow deshabilitado (sin triggers)
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Login a GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generar tag de imagen
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "version=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Tag de imagen: $SHORT_SHA"
+
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/app-backend:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE_BASE }}/app-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/app-frontend:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE_BASE }}/app-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
+
+  deploy:
+    name: Deploy a Azure VM
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+
+    steps:
+      - name: Checkout codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar docker-compose.prod.yml a la VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/opt/app/"
+          strip_components: 0
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          timeout: 120s
+          script: |
+            set -euo pipefail
+
+            APP_DIR="/opt/app"
+            cd "$APP_DIR"
+
+            echo "========================================"
+            echo "Deploy iniciado: $(date)"
+            echo "Tag: ${{ needs.build-and-push.outputs.image_tag }}"
+            echo "========================================"
+
+            sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}|" .env
+
+            echo "${{ secrets.GITHUB_TOKEN }}" | \
+              docker login ghcr.io \
+              -u ${{ github.actor }} \
+              --password-stdin
+
+            docker compose -f docker-compose.prod.yml down --remove-orphans || true
+            docker image prune -f || true
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+
+            echo "Esperando que los servicios levanten..."
+            sleep 15
+
+            docker compose -f docker-compose.prod.yml ps
+
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check OK (HTTP $HTTP_CODE)"
+            else
+              echo "Health check FALLO (HTTP $HTTP_CODE)"
+              docker compose -f docker-compose.prod.yml logs --tail=50
+              exit 1
+            fi
+
+            echo "========================================"
+            echo "Deploy completado: $(date)"
+            echo "========================================"
+
+      - name: Notificar resultado
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Deploy exitoso - Tag: ${{ needs.build-and-push.outputs.image_tag }}"
+          else
+            echo "❌ Deploy fallido"
