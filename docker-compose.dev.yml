@@ -1,0 +1,95 @@
+name: client-management-dev
+
+# ─── Desarrollo local con hot-reload ─────────────────
+# Variables desde backend/.env.development y frontend/.env.development
+# También soporta override via .env en la raíz o variables del shell
+# ─────────────────────────────────────────────────────
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  app-postgres:
+    image: postgres:16-alpine
+    container_name: app-postgres
+    restart: unless-stopped
+    profiles: [dev, test]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-app_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_pass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app_user} -d ${POSTGRES_DB:-app_db}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - app-network
+    logging: *default-logging
+
+  app-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: app-backend
+    restart: unless-stopped
+    profiles: [dev]
+    depends_on:
+      app-postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env.development
+    environment:
+      PORT: ${BACKEND_PORT:-8080}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD:-app_pass}@app-postgres:5432/${POSTGRES_DB:-app_db}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+    networks:
+      - app-network
+    logging: *default-logging
+
+  app-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: app-frontend
+    restart: unless-stopped
+    profiles: [dev]
+    depends_on:
+      app-backend:
+        condition: service_started
+    env_file:
+      - ./frontend/.env.development
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080/api}
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/services:/app/services
+      - ./frontend/lib:/app/lib
+    networks:
+      - app-network
+    logging: *default-logging
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  app_postgres_data:

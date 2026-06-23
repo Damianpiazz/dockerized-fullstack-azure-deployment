@@ -1,61 +1,144 @@
+name: client-management-prod
+
+# ─── Producción — imágenes desde GHCR ─────────────────
+# Requiere un archivo .env en la raíz con las variables:
+#   POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+#   CORS_ORIGIN, NEXT_PUBLIC_API_URL
+#   GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD
+#   DOCKER_REGISTRY, IMAGE_TAG
+# ─────────────────────────────────────────────────────
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   app-postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     container_name: app-postgres
     restart: always
+    profiles: [prod]
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-app_db}
-      POSTGRES_USER: ${POSTGRES_USER:-app_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      # Solo expone a localhost (Nginx hace el proxy externo)
       - "127.0.0.1:5432:5432"
     volumes:
       - app_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app_user} -d ${POSTGRES_DB:-app_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 10s
     networks:
       - app-network
+    logging: *default-logging
 
   app-backend:
-    image: ${DOCKER_REGISTRY}/app-backend:${IMAGE_TAG:-latest}
+    image: ${DOCKER_REGISTRY:?DOCKER_REGISTRY is required}/app-backend:${IMAGE_TAG:-latest}
     container_name: app-backend
     restart: always
+    profiles: [prod]
     depends_on:
       app-postgres:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
-      PORT: 8080
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD}@app-postgres:5432/${POSTGRES_DB:-app_db}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      PORT: ${BACKEND_PORT:-8080}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@app-postgres:5432/${POSTGRES_DB}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN is required}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_SERVICE_NAME: app-backend
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:
-      # Solo expone a localhost (Nginx hace el proxy externo)
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     networks:
       - app-network
+    logging: *default-logging
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "${BACKEND_PORT:-8080}"
 
   app-frontend:
-    image: ${DOCKER_REGISTRY}/app-frontend:${IMAGE_TAG:-latest}
+    image: ${DOCKER_REGISTRY:?DOCKER_REGISTRY is required}/app-frontend:${IMAGE_TAG:-latest}
     container_name: app-frontend
     restart: always
+    profiles: [prod]
     depends_on:
       app-backend:
         condition: service_started
     environment:
-      # El frontend llama al backend DESDE EL NAVEGADOR del usuario
-      # Por eso usa la IP/dominio publico, no el nombre del container
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
       NODE_ENV: production
     ports:
-      # Solo expone a localhost (Nginx hace el proxy externo)
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     networks:
       - app-network
+    logging: *default-logging
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "${FRONTEND_PORT:-3000}"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-latest}
+    container_name: app-otel-collector
+    restart: always
+    profiles: [prod]
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./infra/monitoring/otel-collector.yml:/etc/otel-collector.yml
+    ports:
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:8889:8889"
+    networks:
+      - app-network
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-latest}
+    container_name: app-prometheus
+    restart: always
+    profiles: [prod]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - app-network
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-latest}
+    container_name: app-grafana
+    restart: always
+    profiles: [prod]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER is required}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infra/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - app-network
+    logging: *default-logging
 
 networks:
   app-network:
@@ -63,3 +146,5 @@ networks:
 
 volumes:
   app_postgres_data:
+  prometheus_data:
+  grafana_data:
