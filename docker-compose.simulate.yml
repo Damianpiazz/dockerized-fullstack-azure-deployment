@@ -1,0 +1,184 @@
+name: client-management-simulate
+
+# ─── Simulación Local del Despliegue en Azure ────
+# Levanta TODO el stack de producción localmente:
+#   PostgreSQL, Backend, Frontend, OTEL Collector,
+#   Prometheus, Grafana + Nginx como reverse proxy
+#
+# Uso:
+#   docker compose -f docker-compose.simulate.yml up --build -d
+#   http://localhost              → Frontend via Nginx
+#   http://localhost/api          → Backend via Nginx
+#   http://localhost/grafana      → Grafana via Nginx
+#   http://localhost:3001         → Grafana directo
+#   http://localhost:9090         → Prometheus
+#
+# Variables con defaults — funciona sin .env
+# ─────────────────────────────────────────────────────
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ── Database ─────────────────────────────────
+  app-postgres:
+    image: postgres:16-alpine
+    container_name: app-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-app_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_pass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app_user} -d ${POSTGRES_DB:-app_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - app-network
+    logging: *default-logging
+
+  # ── Backend ──────────────────────────────────
+  app-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: app-backend
+    restart: unless-stopped
+    depends_on:
+      app-postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: ${BACKEND_PORT:-8080}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD:-app_pass}@app-postgres:5432/${POSTGRES_DB:-app_db}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_SERVICE_NAME: app-backend
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks:
+      - app-network
+    logging: *default-logging
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "${BACKEND_PORT:-8080}"
+
+  # ── Frontend ─────────────────────────────────
+  app-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+    container_name: app-frontend
+    restart: unless-stopped
+    depends_on:
+      app-backend:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: ${FRONTEND_PORT:-3000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost/api}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - app-network
+    logging: *default-logging
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "${FRONTEND_PORT:-3000}"
+
+  # ── Nginx Reverse Proxy ─────────────────────
+  app-nginx:
+    image: nginx:alpine
+    container_name: app-nginx
+    restart: unless-stopped
+    depends_on:
+      - app-frontend
+      - app-backend
+      - app-grafana
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./infra/nginx/app.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - app-network
+    logging: *default-logging
+
+  # ── OpenTelemetry Collector ─────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-latest}
+    container_name: app-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./infra/monitoring/otel-collector.yml:/etc/otel-collector.yml
+    ports:
+      - "4318:4318"
+      - "8888:8888"
+      - "8889:8889"
+    networks:
+      - app-network
+    logging: *default-logging
+
+  # ── Prometheus ──────────────────────────────
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-latest}
+    container_name: app-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - app-network
+    logging: *default-logging
+
+  # ── Grafana ─────────────────────────────────
+  app-grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-latest}
+    container_name: app-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: http://localhost/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infra/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3001:3000"
+    networks:
+      - app-network
+    logging: *default-logging
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  app_postgres_data:
+  prometheus_data:
+  grafana_data:
