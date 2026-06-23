@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { Client, clientService } from "@/services/clientService";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,11 +24,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Pencil, Trash2, Plus } from "lucide-react";
+import { TableSkeleton } from "@/components/common/LoadingSkeleton";
 import ClientForm from "./ClientForm";
 
 export default function ClientsTable() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -35,10 +38,13 @@ export default function ClientsTable() {
   const fetchClients = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
       const data = await clientService.getAll();
       setClients(data);
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error al cargar clientes";
+      setError(message);
+      toast.error("Error al cargar clientes", { description: message });
     } finally {
       setLoading(false);
     }
@@ -58,13 +64,20 @@ export default function ClientsTable() {
     setFormOpen(true);
   };
 
+  const handleSuccess = () => {
+    toast.success(selectedClient ? "Cliente actualizado" : "Cliente creado");
+    fetchClients();
+  };
+
   const handleDelete = async () => {
     if (deleteId === null) return;
     try {
       await clientService.remove(deleteId);
+      toast.success("Cliente eliminado");
       await fetchClients();
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error al eliminar cliente";
+      toast.error("Error al eliminar cliente", { description: message });
     } finally {
       setDeleteId(null);
     }
@@ -81,7 +94,14 @@ export default function ClientsTable() {
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground">Cargando...</p>
+        <TableSkeleton />
+      ) : error ? (
+        <div className="flex flex-col items-center gap-4 rounded-md border p-8 text-center">
+          <p className="text-muted-foreground">{error}</p>
+          <Button variant="outline" onClick={fetchClients}>
+            Reintentar
+          </Button>
+        </div>
       ) : (
         <div className="rounded-md border">
           <Table>
@@ -146,7 +166,7 @@ export default function ClientsTable() {
       <ClientForm
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        onSuccess={fetchClients}
+        onSuccess={handleSuccess}
         client={selectedClient}
       />
 
