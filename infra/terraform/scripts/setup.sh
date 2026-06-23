@@ -11,7 +11,7 @@ echo "========================================="
 # ─────────────────────────────────────────────
 # 1. Actualizar sistema
 # ─────────────────────────────────────────────
-echo "[1/7] Actualizando sistema..."
+echo "[1/8] Actualizando sistema..."
 apt-get update -y
 apt-get upgrade -y
 apt-get install -y \
@@ -29,7 +29,7 @@ apt-get install -y \
 # ─────────────────────────────────────────────
 # 2. Instalar Docker
 # ─────────────────────────────────────────────
-echo "[2/7] Instalando Docker..."
+echo "[2/8] Instalando Docker..."
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
   | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -49,11 +49,8 @@ apt-get install -y \
   docker-buildx-plugin \
   docker-compose-plugin
 
-# Habilitar Docker al inicio
 systemctl enable docker
 systemctl start docker
-
-# Agregar usuario al grupo docker
 usermod -aG docker ${admin_username}
 
 echo "Docker version: $(docker --version)"
@@ -62,21 +59,21 @@ echo "Docker Compose version: $(docker compose version)"
 # ─────────────────────────────────────────────
 # 3. Instalar Nginx
 # ─────────────────────────────────────────────
-echo "[3/7] Instalando Nginx..."
+echo "[3/8] Instalando Nginx..."
 apt-get install -y nginx
 systemctl enable nginx
 systemctl start nginx
 
 # ─────────────────────────────────────────────
-# 4. Instalar Certbot (para SSL con Let's Encrypt)
+# 4. Instalar Certbot (SSL)
 # ─────────────────────────────────────────────
-echo "[4/7] Instalando Certbot..."
+echo "[4/8] Instalando Certbot..."
 apt-get install -y certbot python3-certbot-nginx
 
 # ─────────────────────────────────────────────
 # 5. Configurar UFW (firewall)
 # ─────────────────────────────────────────────
-echo "[5/7] Configurando UFW..."
+echo "[5/8] Configurando UFW..."
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ssh
@@ -86,22 +83,22 @@ ufw --force enable
 # ─────────────────────────────────────────────
 # 6. Crear directorios de la app
 # ─────────────────────────────────────────────
-echo "[6/7] Creando estructura de directorios..."
+echo "[6/8] Creando estructura de directorios..."
 APP_DIR="/opt/app"
 mkdir -p "$APP_DIR"
 mkdir -p "$APP_DIR/nginx"
+mkdir -p "$APP_DIR/infra/monitoring/grafana/dashboards"
+mkdir -p "$APP_DIR/infra/monitoring/grafana/datasources"
 chown -R ${admin_username}:${admin_username} "$APP_DIR"
 
 # ─────────────────────────────────────────────
 # 7. Configurar Nginx como reverse proxy
 # ─────────────────────────────────────────────
-echo "[7/7] Configurando Nginx..."
+echo "[7/8] Configurando Nginx..."
 
-# Eliminar config por defecto
 rm -f /etc/nginx/sites-enabled/default
 
 cat > /etc/nginx/sites-available/app.conf << 'NGINX_CONF'
-# Upstream services (Docker containers)
 upstream frontend {
     server 127.0.0.1:3000;
 }
@@ -110,20 +107,19 @@ upstream backend {
     server 127.0.0.1:8080;
 }
 
-# HTTP -> Redireccion (una vez que tengas SSL)
-# Por ahora sirve directo por HTTP
+upstream grafana {
+    server 127.0.0.1:3001;
+}
+
 server {
     listen 80;
     server_name _;
 
-    # Logs
     access_log /var/log/nginx/app_access.log;
     error_log  /var/log/nginx/app_error.log;
 
-    # Tamanio maximo de uploads
     client_max_body_size 50M;
 
-    # API -> Backend
     location /api/ {
         proxy_pass         http://backend;
         proxy_http_version 1.1;
@@ -137,7 +133,15 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # Frontend -> Next.js
+    location /grafana/ {
+        proxy_pass         http://grafana;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
     location / {
         proxy_pass         http://frontend;
         proxy_http_version 1.1;
@@ -151,7 +155,6 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # Health check
     location /health {
         access_log off;
         return 200 "OK\n";
@@ -164,8 +167,10 @@ ln -sf /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/app.conf
 nginx -t && systemctl reload nginx
 
 # ─────────────────────────────────────────────
-# Script de deploy para CI/CD
+# 8. Script de deploy
 # ─────────────────────────────────────────────
+echo "[8/8] Creando script de deploy..."
+
 cat > /opt/app/deploy.sh << 'DEPLOY_SCRIPT'
 #!/bin/bash
 set -euo pipefail
@@ -175,19 +180,13 @@ cd "$APP_DIR"
 
 echo "[deploy] Iniciando deploy: $(date)"
 
-# Bajar servicios previos
-docker compose down --remove-orphans || true
-
-# Limpiar imagenes antiguas (opcional, libera espacio)
+docker compose -f docker-compose.prod.yml down --remove-orphans || true
 docker image prune -f || true
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 
-# Levantar con nueva imagen
-docker compose pull
-docker compose up -d --build
-
-# Verificar que los containers esten corriendo
-sleep 10
-docker compose ps
+sleep 15
+docker compose -f docker-compose.prod.yml ps
 
 echo "[deploy] Deploy completado: $(date)"
 DEPLOY_SCRIPT
@@ -197,5 +196,4 @@ chown ${admin_username}:${admin_username} /opt/app/deploy.sh
 
 echo "========================================="
 echo "  Setup finalizado: $(date)"
-echo "  La VM esta lista para recibir deploys"
 echo "========================================="
