@@ -57,7 +57,7 @@ jobs:
           POSTGRES_USER: app_user
           POSTGRES_PASSWORD: app_pass
         options: >-
-          --health-cmd pg_isready -U app_user -d app_db_test
+          --health-cmd "pg_isready -U app_user -d app_db_test"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
