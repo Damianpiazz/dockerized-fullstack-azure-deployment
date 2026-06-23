@@ -124,17 +124,17 @@ jobs:
 
             # Crear .env si no existe (valores por defecto)
             if [ ! -f .env ]; then
-              cat > .env <<-EOF
-              POSTGRES_DB=${POSTGRES_DB:-app_db}
-              POSTGRES_USER=${POSTGRES_USER:-app_user}
-              POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-app_pass}
-              DOCKER_REGISTRY=${{ env.IMAGE_BASE }}
-              IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
-              CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
-              NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost/api}
-              GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-              GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-EOF
+              {
+                echo "POSTGRES_DB=${POSTGRES_DB:-app_db}"
+                echo "POSTGRES_USER=${POSTGRES_USER:-app_user}"
+                echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-app_pass}"
+                echo "DOCKER_REGISTRY=${{ env.IMAGE_BASE }}"
+                echo "IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}"
+                echo "CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}"
+                echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost/api}"
+                echo "GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}"
+                echo "GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}"
+              } > .env
               echo "  ✓ .env creado con valores por defecto"
             fi
 
