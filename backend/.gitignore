@@ -9,6 +9,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+!.env.*.example
 
 # =========================
 # Logs
@@ -78,5 +79,6 @@ docker-compose.local.yml
 # =========================
 .env.*
 !.env.example
+!.env.*.example
 /generated/prisma
 backend_dump.txt
