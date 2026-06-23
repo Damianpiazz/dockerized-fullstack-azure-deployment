@@ -1,10 +1,20 @@
-import dotenv from "dotenv";
+import "./config/env.js";
+import { logger } from "./config/logger.js";
+import { env } from "./config/env.js";
 import app from "./app.js";
+import { initOpenTelemetry } from "./config/telemetry.js";
 
-dotenv.config();
+async function main() {
+  if (env.OTEL_ENABLED) {
+    await initOpenTelemetry();
+  }
 
-const PORT = process.env.PORT || 3000;
+  app.listen(env.PORT, "0.0.0.0", () => {
+    logger.info({ port: env.PORT, env: env.NODE_ENV }, `Servidor corriendo en http://0.0.0.0:${env.PORT}`);
+  });
+}
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+main().catch((err) => {
+  logger.fatal(err, "Error al iniciar el servidor");
+  process.exit(1);
 });
