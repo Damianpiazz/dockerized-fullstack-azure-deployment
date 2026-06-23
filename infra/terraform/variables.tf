@@ -1,53 +1,52 @@
 variable "prefix" {
-  description = "Prefijo para nombrar todos los recursos"
+  description = "Prefix for naming all Azure resources"
   type        = string
   default     = "app"
 }
 
 variable "location" {
-  description = "Region de Azure donde se despliegan los recursos"
+  description = "Azure region for deployment"
   type        = string
   default     = "East US"
-  # Otras opciones: "Brazil South", "West Europe", "East US 2"
 }
 
 variable "vm_size" {
-  description = "Tamaño de la VM de Azure"
+  description = "Azure VM size"
   type        = string
   default     = "Standard_B2s"
-  # Standard_B1s  -> 1 vCPU, 1 GB  RAM  (muy basico, gratis a veces)
-  # Standard_B2s  -> 2 vCPU, 4 GB  RAM  (recomendado para esta app)
-  # Standard_B4ms -> 4 vCPU, 16 GB RAM  (si necesitas mas)
 }
 
 variable "admin_username" {
-  description = "Usuario administrador de la VM"
+  description = "Admin username for the VM"
   type        = string
   default     = "azureuser"
 }
 
 variable "ssh_public_key" {
-  description = "Clave publica SSH para acceder a la VM"
+  description = "SSH public key for VM access (required)"
   type        = string
-  # Pasa el valor via TF_VAR_ssh_public_key o terraform.tfvars
 }
 
 variable "ssh_source_ip" {
-  description = "IP desde donde se permite SSH (tu IP publica). Usa * para cualquiera (no recomendado)"
+  description = "Source IP for SSH access (format: X.X.X.X/32)"
   type        = string
   default     = "*"
-  # Ejemplo: "190.210.x.x/32"
 }
 
 variable "domain_name" {
-  description = "Dominio para la app (deja vacio si no tenes)"
+  description = "Custom domain name (leave empty if not using)"
   type        = string
   default     = ""
-  # Ejemplo: "miapp.com"
+}
+
+variable "enable_application_insights" {
+  description = "Enable Azure Application Insights (disabled by default — usar Prometheus/Grafana)"
+  type        = bool
+  default     = false
 }
 
 variable "tags" {
-  description = "Tags para los recursos de Azure"
+  description = "Tags for Azure resources"
   type        = map(string)
   default = {
     Environment = "production"

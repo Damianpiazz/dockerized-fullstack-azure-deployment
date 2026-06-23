@@ -6,10 +6,17 @@ terraform {
     }
   }
   required_version = ">= 1.3.0"
+
+  backend "azurerm" {}
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    key_vault {
+      purge_soft_delete_on_destroy = false
+      recover_soft_deleted_key_vaults = true
+    }
+  }
 }
 
 # ─────────────────────────────────────────────
@@ -22,166 +29,113 @@ resource "azurerm_resource_group" "main" {
 }
 
 # ─────────────────────────────────────────────
+# Storage Account (Remote State)
+# ─────────────────────────────────────────────
+# Nota: el storage account para remote state debe crearse manualmente
+# ANTES de hacer terraform init. Usar bootstrap.sh que ademas genera backend.hcl
+#
+#   ./bootstrap.sh [prefix] [location]
+#   terraform init -backend-config=backend.hcl
+#
+# O bien crear manualmente:
+#   az group create -n app-tfstate-rg -l eastus
+#   az storage account create -n apptfstatestg -g app-tfstate-rg -l eastus --sku Standard_LRS
+#   az storage container create -n terraform-state --account-name apptfstatestg
+#   terraform init -backend-config="resource_group_name=app-tfstate-rg" \
+#                  -backend-config="storage_account_name=apptfstatestg" \
+#                  -backend-config="container_name=terraform-state" \
+#                  -backend-config="key=app/terraform.tfstate"
+
+# ─────────────────────────────────────────────
 # Networking
 # ─────────────────────────────────────────────
-resource "azurerm_virtual_network" "main" {
-  name                = "${var.prefix}-vnet"
+module "networking" {
+  source = "./modules/networking"
+
+  prefix             = var.prefix
   resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  address_space       = ["10.0.0.0/16"]
-  tags                = var.tags
-}
+  location           = azurerm_resource_group.main.location
+  tags               = var.tags
 
-resource "azurerm_subnet" "main" {
-  name                 = "${var.prefix}-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.0.1.0/24"]
-}
-
-resource "azurerm_public_ip" "main" {
-  name                = "${var.prefix}-pip"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = var.tags
-}
-
-# ─────────────────────────────────────────────
-# Network Security Group
-# Solo SSH (22), HTTP (80) y HTTPS (443)
-# ─────────────────────────────────────────────
-resource "azurerm_network_security_group" "main" {
-  name                = "${var.prefix}-nsg"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  tags                = var.tags
-
-  security_rule {
-    name                       = "Allow-SSH"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = var.ssh_source_ip
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Allow-HTTP"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "80"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Allow-HTTPS"
-    priority                   = 120
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "443"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Deny-All-Inbound"
-    priority                   = 4096
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-}
-
-resource "azurerm_network_interface" "main" {
-  name                = "${var.prefix}-nic"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  tags                = var.tags
-
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.main.id
-  }
-}
-
-resource "azurerm_network_interface_security_group_association" "main" {
-  network_interface_id      = azurerm_network_interface.main.id
-  network_security_group_id = azurerm_network_security_group.main.id
-}
-
-# ─────────────────────────────────────────────
-# SSH Key
-# ─────────────────────────────────────────────
-resource "azurerm_ssh_public_key" "main" {
-  name                = "${var.prefix}-sshkey"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  public_key          = var.ssh_public_key
-  tags                = var.tags
-}
-
-# ─────────────────────────────────────────────
-# Virtual Machine (Linux)
-# ─────────────────────────────────────────────
-resource "azurerm_linux_virtual_machine" "main" {
-  name                = "${var.prefix}-vm"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  size                = var.vm_size
-  admin_username      = var.admin_username
-  tags                = var.tags
-
-  disable_password_authentication = true
-
-  network_interface_ids = [
-    azurerm_network_interface.main.id,
+  security_rules = [
+    {
+      name                       = "Allow-SSH"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      destination_port_range     = "22"
+      source_address_prefix      = var.ssh_source_ip
+    },
+    {
+      name                       = "Allow-HTTP"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      destination_port_range     = "80"
+    },
+    {
+      name                       = "Allow-HTTPS"
+      priority                   = 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      destination_port_range     = "443"
+    },
+    {
+      name                       = "Allow-Grafana"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      destination_port_range     = "3001"
+      source_address_prefix      = var.ssh_source_ip
+    },
+    {
+      name                       = "Deny-All-Inbound"
+      priority                   = 4096
+      direction                  = "Inbound"
+      access                     = "Deny"
+      protocol                   = "*"
+      destination_port_range     = "*"
+    },
   ]
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
-  }
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Premium_LRS"
-    disk_size_gb         = 64
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
-    version   = "latest"
-  }
-
-  # Script de configuracion inicial
-  custom_data = base64encode(templatefile("${path.module}/scripts/setup.sh", {
-    admin_username = var.admin_username
-  }))
 }
 
 # ─────────────────────────────────────────────
-# DNS (opcional, si tenes un dominio)
+# Compute
 # ─────────────────────────────────────────────
-# Si no tenes dominio, borrá este bloque
+module "compute" {
+  source = "./modules/compute"
+
+  prefix              = var.prefix
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  network_interface_id = module.networking.network_interface_id
+  vm_size             = var.vm_size
+  admin_username      = var.admin_username
+  ssh_public_key      = var.ssh_public_key
+  tags                = var.tags
+}
+
+# ─────────────────────────────────────────────
+# Monitoring (Azure)
+# ─────────────────────────────────────────────
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  prefix             = var.prefix
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  log_retention_days = 30
+  enable_application_insights = var.enable_application_insights
+  tags                = var.tags
+}
+
+# ─────────────────────────────────────────────
+# DNS (opcional)
+# ─────────────────────────────────────────────
 resource "azurerm_dns_zone" "main" {
   count               = var.domain_name != "" ? 1 : 0
   name                = var.domain_name
@@ -189,13 +143,13 @@ resource "azurerm_dns_zone" "main" {
   tags                = var.tags
 }
 
-resource "azurerm_dns_a_record" "main" {
+resource "azurerm_dns_a_record" "root" {
   count               = var.domain_name != "" ? 1 : 0
   name                = "@"
   zone_name           = azurerm_dns_zone.main[0].name
   resource_group_name = azurerm_resource_group.main.name
   ttl                 = 300
-  records             = [azurerm_public_ip.main.ip_address]
+  records             = [module.networking.public_ip]
 }
 
 resource "azurerm_dns_a_record" "www" {
@@ -204,5 +158,5 @@ resource "azurerm_dns_a_record" "www" {
   zone_name           = azurerm_dns_zone.main[0].name
   resource_group_name = azurerm_resource_group.main.name
   ttl                 = 300
-  records             = [azurerm_public_ip.main.ip_address]
+  records             = [module.networking.public_ip]
 }
